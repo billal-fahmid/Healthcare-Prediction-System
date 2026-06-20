@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ user.name }} — Admin Dashboard</title>
+<style>
+    :root {
+        --bg: #eef1f6;
+        --card: #ffffff;
+        --ink: #1f2937;
+        --muted: #6b7280;
+        --brand: #2c63d6;
+        --brand-dark: #1f4aa8;
+        --brand-soft: #e8f0ff;
+        --line: #e2e6ed;
+        --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body {
+        font-family: "Segoe UI", "Noto Sans Bengali", Arial, sans-serif;
+        max-width: 760px;
+        margin: 28px auto 80px;
+        background: var(--bg);
+        color: var(--ink);
+        padding: 0 16px;
+        line-height: 1.5;
+    }
+    .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+        color: var(--muted);
+    }
+    .topbar a {
+        color: var(--brand);
+        font-weight: 600;
+        text-decoration: none;
+        margin-left: 14px;
+    }
+    .topbar a:hover { text-decoration: underline; }
+    .back-link {
+        display: inline-block;
+        margin-bottom: 14px;
+        color: var(--brand);
+        font-weight: 600;
+        text-decoration: none;
+        font-size: 0.9rem;
+    }
+    .back-link:hover { text-decoration: underline; }
+    .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: 0 2px 10px rgba(20, 30, 60, 0.06);
+        padding: 22px 24px;
+        margin-bottom: 20px;
+    }
+    h1 {
+        color: #16233f;
+        font-size: 1.4rem;
+        margin: 0 0 4px;
+    }
+    .email {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-bottom: 18px;
+    }
+    .info-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+    }
+    .info-item .label {
+        font-size: 0.76rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        margin-bottom: 3px;
+    }
+    .info-item .value {
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--ink);
+    }
+    h2 {
+        font-size: 1.15rem;
+        color: #16233f;
+        margin: 0 0 14px;
+    }
+    .entry {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px 20px;
+        margin-bottom: 14px;
+        box-shadow: 0 2px 10px rgba(20, 30, 60, 0.06);
+    }
+    .entry-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    .entry .date {
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-bottom: 6px;
+    }
+    .entry h3 {
+        margin: 0 0 8px;
+        color: var(--brand-dark);
+        font-size: 1.05rem;
+    }
+    .entry .symptoms {
+        font-size: 0.86rem;
+        color: var(--muted);
+    }
+    .download-btn {
+        flex-shrink: 0;
+        background: var(--brand-soft);
+        color: var(--brand-dark);
+        border: 1px solid #cfe0ff;
+        border-radius: 8px;
+        padding: 7px 14px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+    }
+    .download-btn:hover { background: #d8e6ff; }
+    .empty {
+        text-align: center;
+        color: var(--muted);
+        padding: 30px 0;
+    }
+</style>
+</head>
+<body>
+
+    <div class="topbar">
+        <span>👤 {{ admin_name }}</span>
+        <span>
+            <a href="{{ url_for('logout') }}">লগআউট</a>
+        </span>
+    </div>
+
+    <a class="back-link" href="{{ url_for('admin_dashboard') }}">← Dashboard-এ ফিরে যান</a>
+
+    <div class="card">
+        <h1>{{ user.name }}</h1>
+        <div class="email">{{ user.email }}</div>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="label">Phone</div>
+                <div class="value">{{ user.phone or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <div class="label">Age</div>
+                <div class="value">{{ user.age if user.age is not none else '—' }}</div>
+            </div>
+            <div class="info-item">
+                <div class="label">Blood Group</div>
+                <div class="value">{{ user.blood_group or '—' }}</div>
+            </div>
+            <div class="info-item">
+                <div class="label">Height</div>
+                <div class="value">{{ user.height if user.height is not none else '—' }} cm</div>
+            </div>
+            <div class="info-item">
+                <div class="label">Weight</div>
+                <div class="value">{{ user.weight if user.weight is not none else '—' }} kg</div>
+            </div>
+            <div class="info-item">
+                <div class="label">Joined</div>
+                <div class="value">{{ user.created_at_display }}</div>
+            </div>
+        </div>
+    </div>
+
+    <h2>📋 Prediction History ({{ history|length }})</h2>
+
+    {% if history %}
+        {% for h in history %}
+            <div class="entry">
+                <div class="entry-top">
+                    <div>
+                        <div class="date">{{ h.created_at }}</div>
+                        <h3>{{ h.prediction }}{% if h.prediction_bn %} ({{ h.prediction_bn }}){% endif %}</h3>
+                        <div class="symptoms">Symptoms: {{ h.symptoms_display }}</div>
+                    </div>
+                    <a class="download-btn" href="{{ url_for('download_pdf', prediction_id=h.id_str) }}">⬇ PDF</a>
+                </div>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="empty">এই user এখনো কোনো prediction করেননি।</p>
+    {% endif %}
+
+</body>
+</html>

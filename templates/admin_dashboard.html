@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Dashboard — Disease Prediction System</title>
+<style>
+    :root {
+        --bg: #eef1f6;
+        --card: #ffffff;
+        --ink: #1f2937;
+        --muted: #6b7280;
+        --brand: #2c63d6;
+        --brand-dark: #1f4aa8;
+        --brand-soft: #e8f0ff;
+        --line: #e2e6ed;
+        --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body {
+        font-family: "Segoe UI", "Noto Sans Bengali", Arial, sans-serif;
+        max-width: 1000px;
+        margin: 28px auto 80px;
+        background: var(--bg);
+        color: var(--ink);
+        padding: 0 16px;
+        line-height: 1.5;
+    }
+    .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+        color: var(--muted);
+    }
+    .topbar a {
+        color: var(--brand);
+        font-weight: 600;
+        text-decoration: none;
+        margin-left: 14px;
+    }
+    .topbar a:hover { text-decoration: underline; }
+    h1 {
+        color: #16233f;
+        font-size: 1.5rem;
+        margin: 0 0 4px;
+    }
+    .subtitle {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-bottom: 22px;
+    }
+    .stats {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 14px;
+        margin-bottom: 24px;
+    }
+    .stat-card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 18px 20px;
+        box-shadow: 0 2px 10px rgba(20, 30, 60, 0.06);
+    }
+    .stat-card .num {
+        font-size: 1.8rem;
+        font-weight: 700;
+        color: var(--brand-dark);
+    }
+    .stat-card .label {
+        font-size: 0.82rem;
+        color: var(--muted);
+        margin-top: 2px;
+    }
+    .table-wrap {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: 0 2px 10px rgba(20, 30, 60, 0.06);
+        overflow-x: auto;
+    }
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.88rem;
+        min-width: 760px;
+    }
+    th, td {
+        text-align: left;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+    }
+    th {
+        background: #f7f9fc;
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #fafbfd; }
+    .pill {
+        display: inline-block;
+        background: var(--brand-soft);
+        color: var(--brand-dark);
+        border-radius: 999px;
+        padding: 2px 10px;
+        font-size: 0.78rem;
+        font-weight: 600;
+    }
+    .view-link {
+        color: var(--brand);
+        font-weight: 600;
+        text-decoration: none;
+        font-size: 0.86rem;
+    }
+    .view-link:hover { text-decoration: underline; }
+    .empty {
+        text-align: center;
+        color: var(--muted);
+        padding: 40px 0;
+    }
+</style>
+</head>
+<body>
+
+    <div class="topbar">
+        <span>👤 {{ admin_name }}</span>
+        <span>
+            <a href="{{ url_for('logout') }}">লগআউট</a>
+        </span>
+    </div>
+
+    <h1>🛠️ Admin Dashboard</h1>
+    <p class="subtitle">সব user এবং তাদের disease prediction history এখানে দেখুন</p>
+
+    <div class="stats">
+        <div class="stat-card">
+            <div class="num">{{ total_users }}</div>
+            <div class="label">Total Registered Users</div>
+        </div>
+        <div class="stat-card">
+            <div class="num">{{ total_predictions }}</div>
+            <div class="label">Total Predictions Made</div>
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        {% if users %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Age</th>
+                    <th>Height (cm)</th>
+                    <th>Weight (kg)</th>
+                    <th>Blood Group</th>
+                    <th>Predictions</th>
+                    <th>Joined</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ u.name }}</td>
+                    <td>{{ u.email }}</td>
+                    <td>{{ u.phone }}</td>
+                    <td>{{ u.age if u.age is not none else '—' }}</td>
+                    <td>{{ u.height if u.height is not none else '—' }}</td>
+                    <td>{{ u.weight if u.weight is not none else '—' }}</td>
+                    <td><span class="pill">{{ u.blood_group or '—' }}</span></td>
+                    <td>{{ u.prediction_count }}</td>
+                    <td>{{ u.created_at_display }}</td>
+                    <td><a class="view-link" href="{{ url_for('admin_user_detail', user_id=u.id_str) }}">বিস্তারিত →</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+            <p class="empty">এখনো কোনো user রেজিস্টার করেননি।</p>
+        {% endif %}
+    </div>
+
+</body>
+</html>

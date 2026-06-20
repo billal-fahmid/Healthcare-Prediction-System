@@ -11,6 +11,14 @@ user-এর দেওয়া symptom লিস্ট থেকে disease pred
 User-এর data (name, email, phone, height, weight, age, blood group)
 এবং prediction history MongoDB-তে save হয়।
 
+Master Admin: .env-এ ADMIN_EMAIL ও ADMIN_PASSWORD সেট করলে app চালু হওয়ার
+সময় (না থাকলে) সেই account auto-create হবে। Admin সেই একই /login পেজ দিয়েই
+লগইন করবে, কিন্তু লগইন করার পর সরাসরি /admin (Admin Dashboard)-এ চলে যাবে,
+যেখানে সব user-এর তথ্য ও সবার prediction history দেখা যাবে।
+
+User বা Admin — দুজনেই কোনো prediction result-এর পাশে থাকা "Download PDF"
+বাটনে ক্লিক করে সেই রিপোর্টের PDF download করতে পারবে।
+
 Run করার আগে এই ফাইলগুলো app.py-এর same folder-এ থাকতে হবে:
   disease_model.pkl, label_encoder.pkl, symptom_weights.pkl,
   all_symptoms.pkl, disease_info.pkl
@@ -19,24 +27,40 @@ Run করার আগে এই ফাইলগুলো app.py-এর same fo
 থেকে আসে, কোডে hardcode করা নেই (security-এর জন্য)।
 
 Install করুন:
-  pip install pymongo "pymongo[srv]" dnspython python-dotenv
+  pip install pymongo "pymongo[srv]" dnspython python-dotenv reportlab
 
-app.py-এর same folder-এ একটা .env ফাইল বানান, ভেতরে এক লাইন:
+app.py-এর same folder-এ একটা .env ফাইল বানান, ভেতরে এইরকম লাইনগুলো:
   MONGO_URI=mongodb+srv://<user>:<pass>@cluster0.xxxxx.mongodb.net/?appName=Cluster0
+  ADMIN_EMAIL=diseaseAdmin
+  ADMIN_PASSWORD=diseaseAdminPass
 
 (.env ফাইলে quote ("") ব্যবহার করবেন না — সরাসরি লিখুন, যেমন উপরে দেখানো হলো।)
+
+লক্ষ্য করুনঃ PDF রিপোর্টে শুধু English টেক্সট দেখানো হয় (disease name,
+description, precautions)। Bangla টেক্সট (prediction_bn) PDF-এ অন্তর্ভুক্ত
+করা হয়নি, কারণ ডিফল্ট PDF font বাংলা গ্লিফ সাপোর্ট করে না — সেটা দেখাতে
+চাইলে একটা বাংলা TTF font (যেমন NotoSansBengali) ফাইলে include করে
+reportlab-এ register করতে হবে।
 """
 
 import os
-from flask import Flask, render_template, request, redirect, url_for, session
+from io import BytesIO
+from flask import Flask, render_template, request, redirect, url_for, session, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
+from bson.objectid import ObjectId
 from datetime import datetime
 import joblib
 import numpy as np
 import pandas as pd
 from translations import symptom_bn, disease_bn
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 
 # .env ফাইল থেকে env variable লোড করা হচ্ছে
 # (.env ফাইলে MONGO_URI=... লেখা থাকলে এই লাইন সেটা পড়ে env variable বানিয়ে দেয়)
@@ -79,6 +103,34 @@ history_col = db["predictions"]
 users_col.create_index("email", unique=True)
 
 # -------------------------------------------------
+# Master Admin account — .env-এ ADMIN_EMAIL/ADMIN_PASSWORD দিলে
+# app চালু হওয়ার সময় (না থাকলে) auto-create হয়ে যাবে
+# -------------------------------------------------
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+
+if ADMIN_EMAIL and ADMIN_PASSWORD:
+    existing_admin = users_col.find_one({"email": ADMIN_EMAIL.strip().lower()})
+    if not existing_admin:
+        users_col.insert_one({
+            "name": "Master Admin",
+            "email": ADMIN_EMAIL.strip().lower(),
+            "phone": "",
+            "age": None,
+            "height": None,
+            "weight": None,
+            "blood_group": "",
+            "password_hash": generate_password_hash(ADMIN_PASSWORD),
+            "is_admin": True,
+            "created_at": datetime.utcnow(),
+        })
+        print(f"✅ Admin account তৈরি হয়েছে: {ADMIN_EMAIL}")
+    elif not existing_admin.get("is_admin"):
+        # ইমেইল আগে থেকেই normal user হিসেবে আছে — সেটাকে admin বানিয়ে দেওয়া হলো
+        users_col.update_one({"_id": existing_admin["_id"]}, {"$set": {"is_admin": True}})
+        print(f"✅ বিদ্যমান অ্যাকাউন্টকে admin করা হয়েছে: {ADMIN_EMAIL}")
+
+# -------------------------------------------------
 # train.py থেকে তৈরি হওয়া সব ফাইল Load করা
 # -------------------------------------------------
 model = joblib.load("disease_model.pkl")
@@ -111,6 +163,20 @@ def login_required(view_func):
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return redirect(url_for("login"))
+        return view_func(*args, **kwargs)
+
+    return wrapped
+
+
+def admin_required(view_func):
+    from functools import wraps
+
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect(url_for("login"))
+        if not session.get("is_admin"):
+            return redirect(url_for("home"))
         return view_func(*args, **kwargs)
 
     return wrapped
@@ -191,6 +257,10 @@ def login():
         if user and check_password_hash(user["password_hash"], password):
             session["user_id"] = str(user["_id"])
             session["user_name"] = user["name"]
+            session["is_admin"] = bool(user.get("is_admin", False))
+
+            if session["is_admin"]:
+                return redirect(url_for("admin_dashboard"))
             return redirect(url_for("home"))
         else:
             error = "ইমেইল বা পাসওয়ার্ড সঠিক নয়।"
@@ -208,6 +278,51 @@ def logout():
 
 
 # -------------------------------------------------
+# Admin Dashboard — সব user ও prediction দেখার জন্য
+# -------------------------------------------------
+@app.route("/admin")
+@admin_required
+def admin_dashboard():
+    users = list(users_col.find({"is_admin": {"$ne": True}}).sort("created_at", -1))
+    total_predictions = history_col.count_documents({})
+
+    for u in users:
+        u["id_str"] = str(u["_id"])
+        u["prediction_count"] = history_col.count_documents({"user_id": u["id_str"]})
+        u["created_at_display"] = u["created_at"].strftime("%d %B %Y") if u.get("created_at") else "—"
+
+    return render_template(
+        "admin_dashboard.html",
+        users=users,
+        total_users=len(users),
+        total_predictions=total_predictions,
+        admin_name=session.get("user_name"),
+    )
+
+
+@app.route("/admin/user/<user_id>")
+@admin_required
+def admin_user_detail(user_id):
+    user = users_col.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        return redirect(url_for("admin_dashboard"))
+
+    records = list(history_col.find({"user_id": user_id}).sort("created_at", -1))
+    for r in records:
+        r["id_str"] = str(r["_id"])
+        r["created_at"] = r["created_at"].strftime("%d %B %Y, %I:%M %p")
+
+    user["created_at_display"] = user["created_at"].strftime("%d %B %Y") if user.get("created_at") else "—"
+
+    return render_template(
+        "admin_user_detail.html",
+        user=user,
+        history=records,
+        admin_name=session.get("user_name"),
+    )
+
+
+# -------------------------------------------------
 # Prediction history
 # -------------------------------------------------
 @app.route("/history")
@@ -217,6 +332,7 @@ def history():
         history_col.find({"user_id": session["user_id"]}).sort("created_at", -1)
     )
     for r in records:
+        r["id_str"] = str(r["_id"])
         r["created_at"] = r["created_at"].strftime("%d %B %Y, %I:%M %p")
     return render_template("history.html", history=records, user_name=session.get("user_name"))
 
@@ -258,18 +374,24 @@ def home():
             description = info.get("description", "")
             precautions = info.get("precautions", [])
 
-            # প্রেডিকশন history-তে save করা
+            # প্রেডিকশন history-তে save করা (description/precautions-ও রাখা হলো, যাতে PDF-এ ব্যবহার করা যায়)
             symptoms_display = ", ".join(symptom_display_map.get(s, s) for s in selected_symptoms)
-            history_col.insert_one({
+            inserted = history_col.insert_one({
                 "user_id": session["user_id"],
                 "symptoms": selected_symptoms,
                 "symptoms_display": symptoms_display,
                 "prediction": prediction,
                 "prediction_bn": prediction_bn,
+                "description": description,
+                "precautions": precautions,
                 "created_at": datetime.utcnow(),
             })
+            prediction_id = str(inserted.inserted_id)
         else:
             prediction = "অনুগ্রহ করে অন্তত একটি symptom select করুন।"
+            prediction_id = None
+    else:
+        prediction_id = None
 
     return render_template(
         "index.html",
@@ -281,6 +403,126 @@ def home():
         precautions=precautions,
         selected_symptoms=selected_symptoms,
         user_name=session.get("user_name"),
+        prediction_id=prediction_id,
+    )
+
+
+# -------------------------------------------------
+# Prediction PDF Download
+# -------------------------------------------------
+@app.route("/download-pdf/<prediction_id>")
+@login_required
+def download_pdf(prediction_id):
+    record = history_col.find_one({"_id": ObjectId(prediction_id)})
+    if not record:
+        return redirect(url_for("history"))
+
+    # নিজের prediction অথবা admin হলেই PDF download করতে পারবে — অন্যজনের রিপোর্ট নয়
+    is_owner = record.get("user_id") == session.get("user_id")
+    if not (is_owner or session.get("is_admin")):
+        return redirect(url_for("home"))
+
+    patient = users_col.find_one({"_id": ObjectId(record["user_id"])})
+    patient_name = patient.get("name", "—") if patient else "—"
+    patient_email = patient.get("email", "—") if patient else "—"
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+        leftMargin=20 * mm, rightMargin=20 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TitleStyle", parent=styles["Title"], fontSize=18,
+        textColor=colors.HexColor("#16233f"), spaceAfter=4, alignment=TA_CENTER,
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleStyle", parent=styles["Normal"], fontSize=10,
+        textColor=colors.HexColor("#6b7280"), spaceAfter=18, alignment=TA_CENTER,
+    )
+    heading_style = ParagraphStyle(
+        "HeadingStyle", parent=styles["Heading2"], fontSize=13,
+        textColor=colors.HexColor("#1f4aa8"), spaceBefore=14, spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        "BodyStyle", parent=styles["Normal"], fontSize=10.5, leading=15,
+    )
+    disease_style = ParagraphStyle(
+        "DiseaseStyle", parent=styles["Heading1"], fontSize=16,
+        textColor=colors.HexColor("#1e8449"), spaceAfter=4,
+    )
+    warn_style = ParagraphStyle(
+        "WarnStyle", parent=styles["Normal"], fontSize=9, leading=13,
+        textColor=colors.HexColor("#92400e"),
+    )
+
+    elements = []
+    elements.append(Paragraph("Disease Prediction Report", title_style))
+    elements.append(Paragraph(
+        "Generated by Disease Prediction System — for preliminary reference only",
+        subtitle_style,
+    ))
+    elements.append(HRFlowable(width="100%", color=colors.HexColor("#e2e6ed"), thickness=1))
+    elements.append(Spacer(1, 12))
+
+    # Patient info table
+    info_data = [
+        ["Patient Name", patient_name],
+        ["Email", patient_email],
+        ["Report Date", record["created_at"].strftime("%d %B %Y, %I:%M %p")],
+    ]
+    info_table = Table(info_data, colWidths=[120, 360])
+    info_table.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#6b7280")),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.5, colors.HexColor("#eef1f6")),
+    ]))
+    elements.append(info_table)
+    elements.append(Spacer(1, 10))
+
+    # Predicted disease
+    elements.append(Paragraph("Predicted Disease", heading_style))
+    elements.append(Paragraph(record.get("prediction", "—"), disease_style))
+
+    # Symptoms
+    elements.append(Paragraph("Reported Symptoms", heading_style))
+    symptoms_text = record.get("symptoms_display", "—")
+    elements.append(Paragraph(symptoms_text, body_style))
+
+    # Description
+    if record.get("description"):
+        elements.append(Paragraph("Description", heading_style))
+        elements.append(Paragraph(record["description"], body_style))
+
+    # Precautions
+    if record.get("precautions"):
+        elements.append(Paragraph("Precautions", heading_style))
+        for p in record["precautions"]:
+            elements.append(Paragraph(f"&ndash; {p}", body_style))
+
+    elements.append(Spacer(1, 20))
+    elements.append(HRFlowable(width="100%", color=colors.HexColor("#e2e6ed"), thickness=1))
+    elements.append(Spacer(1, 8))
+    elements.append(Paragraph(
+        "This is only a preliminary indication. Please consult a qualified doctor for "
+        "an accurate diagnosis and treatment.",
+        warn_style,
+    ))
+
+    doc.build(elements)
+    buffer.seek(0)
+
+    filename = f"disease_prediction_{record['created_at'].strftime('%Y%m%d_%H%M')}.pdf"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/pdf",
     )
 
 
