@@ -45,7 +45,7 @@ reportlab-এ register করতে হবে।
 
 import os
 from io import BytesIO
-from flask import Flask, render_template, request, redirect, url_for, session, send_file
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
@@ -151,6 +151,35 @@ def to_display_name(symptom):
 symptom_display_map = {s: to_display_name(s) for s in all_symptoms}
 # Dropdown-এ readable নাম অনুযায়ী sort করে দেখানো
 sorted_symptoms = sorted(all_symptoms, key=lambda s: symptom_display_map[s])
+
+symptom_index_map = {symptom: idx for idx, symptom in enumerate(all_symptoms)}
+
+
+def compute_prediction_for_symptoms(selected_symptoms):
+    prediction = None
+    prediction_bn = ""
+    description = ""
+    precautions = []
+
+    if selected_symptoms:
+        input_vector = np.zeros(len(all_symptoms))
+        for symptom in selected_symptoms:
+            idx = symptom_index_map.get(symptom)
+            if idx is not None:
+                input_vector[idx] = symptom_weights.get(symptom, 1)
+
+        input_vector = input_vector.reshape(1, -1)
+        input_df = pd.DataFrame(input_vector, columns=all_symptoms)
+
+        pred_encoded = model.predict(input_df)[0]
+        prediction = label_encoder.inverse_transform([pred_encoded])[0]
+        prediction_bn = disease_bn(prediction)
+
+        info = disease_info.get(prediction, {})
+        description = info.get("description", "")
+        precautions = info.get("precautions", [])
+
+    return prediction, prediction_bn, description, precautions
 
 
 # -------------------------------------------------
@@ -408,6 +437,27 @@ def home():
 
 
 # -------------------------------------------------
+# AJAX prediction endpoint for realtime symptom updates
+# -------------------------------------------------
+@app.route("/predict-json", methods=["POST"])
+@login_required
+def predict_json():
+    payload = request.get_json(silent=True) or {}
+    selected_symptoms = payload.get("symptoms") if isinstance(payload.get("symptoms"), list) else []
+
+    prediction, prediction_bn, description, precautions = compute_prediction_for_symptoms(selected_symptoms)
+    response = {
+        "prediction": prediction,
+        "prediction_bn": prediction_bn,
+        "description": description,
+        "precautions": precautions,
+    }
+    flask_response = jsonify(response)
+    flask_response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return flask_response
+
+
+# -------------------------------------------------
 # Prediction PDF Download
 # -------------------------------------------------
 @app.route("/download-pdf/<prediction_id>")
@@ -429,9 +479,37 @@ def download_pdf(prediction_id):
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
-        topMargin=20 * mm, bottomMargin=20 * mm,
+        topMargin=28 * mm, bottomMargin=28 * mm,
         leftMargin=20 * mm, rightMargin=20 * mm,
     )
+
+    def draw_page(canvas, doc):
+        width, height = A4
+        canvas.saveState()
+
+        # Logo badge in the top-left corner
+        logo_width = 40
+        logo_height = 20
+        logo_x = doc.leftMargin
+        logo_y = height - doc.topMargin + 8
+        canvas.setFillColor(colors.HexColor("#1f4aa8"))
+        canvas.roundRect(logo_x, logo_y - logo_height, logo_width, logo_height, 5, stroke=0, fill=1)
+        canvas.setFillColor(colors.white)
+        canvas.setFont("Helvetica-Bold", 10)
+        canvas.drawString(logo_x + 8, logo_y - 14, "HPS")
+        canvas.setFont("Helvetica", 6)
+        canvas.drawString(logo_x + logo_width + 8, logo_y - 14, "Healthcare Prediction")
+
+        # Watermark in the center
+        canvas.setFillColor(colors.HexColor("#d1d5db"))
+        canvas.setFont("Helvetica-Bold", 48)
+        canvas.translate(width / 2, height / 2)
+        canvas.rotate(45)
+        canvas.drawCentredString(0, 0, "CONFIDENTIAL")
+        canvas.setFont("Helvetica-Bold", 24)
+        canvas.drawCentredString(0, -40, "FOR PRIVATE USE ONLY")
+
+        canvas.restoreState()
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
@@ -514,7 +592,7 @@ def download_pdf(prediction_id):
         warn_style,
     ))
 
-    doc.build(elements)
+    doc.build(elements, onFirstPage=draw_page, onLaterPages=draw_page)
     buffer.seek(0)
 
     filename = f"disease_prediction_{record['created_at'].strftime('%Y%m%d_%H%M')}.pdf"

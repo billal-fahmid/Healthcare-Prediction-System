@@ -215,24 +215,55 @@
         font-size: 0.85rem;
     }
 
-    button[type="submit"] {
+    .button-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
         margin-top: 18px;
-        width: 100%;
-        background: var(--brand);
-        color: #fff;
-        border: none;
-        padding: 13px 20px;
+    }
+
+    .button-row .btn {
+        flex: 1 1 200px;
+        min-width: 160px;
         border-radius: 8px;
         font-size: 1rem;
         font-weight: 600;
+        padding: 13px 20px;
+        border: 1px solid transparent;
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background 0.15s, border-color 0.15s, color 0.15s;
+        text-align: center;
     }
 
-    button[type="submit"]:hover { background: var(--brand-dark); }
-    button[type="submit"]:disabled {
+    .button-row .btn-primary {
+        background: var(--brand);
+        color: #fff;
+        border-color: transparent;
+    }
+
+    .button-row .btn-primary:hover {
+        background: var(--brand-dark);
+    }
+
+    .button-row .btn-primary:disabled {
         background: #aebbd6;
         cursor: not-allowed;
+    }
+
+    .button-row .btn-reset {
+        background: #fff;
+        color: var(--ink);
+        border-color: #ccd3df;
+    }
+
+    .button-row .btn-reset:hover {
+        background: #f5f7fb;
+    }
+
+    .button-row .btn-reset:focus-visible,
+    .button-row .btn-primary:focus-visible {
+        outline: 3px solid rgba(44, 99, 214, 0.35);
+        outline-offset: 2px;
     }
 
     .result {
@@ -342,14 +373,17 @@
                 {% endfor %}
             </select>
 
-            <small>কমপক্ষে ১টি, ভালো ফলাফলের জন্য ৩-৫টি symptom select করুন।</small>
+            <small>কমপক্ষে ১টি, ভালো ফলाफলের জন্য ৩-৫টি symptom select করুন।</small>
 
-            <button type="submit" id="submit-btn" disabled>Predict Disease</button>
+            <div class="button-row">
+                <button type="submit" id="submit-btn" class="btn btn-primary" disabled>Predict Disease</button>
+                <button type="button" id="reset-btn" class="btn btn-reset">Reset</button>
+            </div>
         </form>
     </div>
 
-    {% if prediction %}
-    <div class="card result">
+    <div class="card result" id="prediction-result" {% if not prediction %}style="display:none;"{% endif %}>
+        {% if prediction %}
         <h2>সম্ভাব্য রোগ: {{ prediction }}{% if prediction_bn %} ({{ prediction_bn }}){% endif %}</h2>
 
         {% if description %}
@@ -366,12 +400,8 @@
         {% endif %}
 
         <p class="warn">⚠️ এটি শুধুমাত্র একটি প্রাথমিক ধারণা, প্রকৃত চিকিৎসার জন্য অবশ্যই ডাক্তারের পরামর্শ নিন।</p>
-
-        {% if prediction_id %}
-            <a class="download-pdf-btn" href="{{ url_for('download_pdf', prediction_id=prediction_id) }}">⬇ Download PDF Report</a>
         {% endif %}
     </div>
-    {% endif %}
 
 <script>
 (function () {
@@ -381,6 +411,9 @@
     const tagsContainer = document.getElementById('selected-tags');
     const submitBtn     = document.getElementById('submit-btn');
     const countPill     = document.getElementById('count-pill');
+    const resultCard    = document.getElementById('prediction-result');
+
+    const predictionUrl = "{{ url_for('predict_json') }}";
 
     // Build the full symptom catalogue from the hidden <select> (server-rendered).
     const allOptions = Array.from(realSelect.options).map(opt => ({
@@ -429,6 +462,17 @@
             tag.appendChild(removeBtn);
             tagsContainer.appendChild(tag);
         });
+        fetchPrediction();
+    }
+
+    function resetSelection() {
+        selected.clear();
+        searchInput.value = '';
+        renderTags();
+        syncRealSelect();
+        renderDropdown('');
+        resultCard.style.display = 'none';
+        resultCard.innerHTML = '';
     }
 
     function highlight(label, query) {
@@ -497,6 +541,68 @@
         activeIndex = idx;
     }
 
+    function renderPredictionResult(data) {
+        if (!data || !data.prediction) {
+            resultCard.style.display = 'none';
+            resultCard.innerHTML = '';
+            return;
+        }
+
+        resultCard.innerHTML = '';
+        const title = document.createElement('h2');
+        title.textContent = `সম্ভাব্য রোগ: ${data.prediction}${data.prediction_bn ? ` (${data.prediction_bn})` : ''}`;
+        resultCard.appendChild(title);
+
+        if (data.description) {
+            const desc = document.createElement('p');
+            desc.innerHTML = `<strong>বিস্তারিত:</strong> ${data.description}`;
+            resultCard.appendChild(desc);
+        }
+
+        if (Array.isArray(data.precautions) && data.precautions.length > 0) {
+            const pTitle = document.createElement('p');
+            pTitle.innerHTML = '<strong>সতর্কতা / করণীয়:</strong>';
+            resultCard.appendChild(pTitle);
+            const list = document.createElement('ul');
+            data.precautions.forEach(item => {
+                const li = document.createElement('li');
+                li.textContent = item;
+                list.appendChild(li);
+            });
+            resultCard.appendChild(list);
+        }
+
+        const warning = document.createElement('p');
+        warning.className = 'warn';
+        warning.textContent = '⚠️ এটি শুধুমাত্র একটি প্রাথমিক ধারণা, প্রকৃত চিকিৎসার জন্য অবশ্যই ডাক্তারের পরামর্শ নিন।';
+        resultCard.appendChild(warning);
+        resultCard.style.display = 'block';
+    }
+
+    function fetchPrediction() {
+        if (selected.size === 0) {
+            resultCard.style.display = 'none';
+            resultCard.innerHTML = '';
+            return;
+        }
+
+        fetch(predictionUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+            },
+            body: JSON.stringify({ symptoms: Array.from(selected) }),
+            cache: 'no-store',
+        })
+            .then(response => response.json())
+            .then(renderPredictionResult)
+            .catch(() => {
+                resultCard.style.display = 'none';
+                resultCard.innerHTML = '';
+            });
+    }
+
     searchInput.addEventListener('input', () => renderDropdown(searchInput.value));
 
     searchInput.addEventListener('focus', () => renderDropdown(searchInput.value));
@@ -534,6 +640,11 @@
         }
     });
 
+    const resetBtn = document.getElementById('reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', resetSelection);
+    }
+
     document.getElementById('predict-form').addEventListener('submit', () => {
         syncRealSelect();
     });
@@ -541,6 +652,7 @@
     // Init
     renderTags();
     syncRealSelect();
+    fetchPrediction();
 })();
 </script>
 
